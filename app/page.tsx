@@ -31,6 +31,28 @@ export default function Home() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [loadingPayment, setLoadingPayment] = useState<boolean>(false);
 
+  const contentTopRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (currentStep === 1) {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    } else {
+      const timer = setTimeout(() => {
+        if (contentTopRef.current) {
+          const elementPosition = contentTopRef.current.getBoundingClientRect().top;
+          const offsetPosition = elementPosition + window.pageYOffset - 20;
+          window.scrollTo({
+            top: offsetPosition,
+            behavior: 'smooth'
+          });
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [currentStep]);
+
   const [quantities, setQuantities] = useState<{ [key: string]: number }>({
     barcelona: 0,
     girona: 0,
@@ -56,21 +78,23 @@ export default function Home() {
     phone: '',
     address: '',
     city: '',
-    postalCode: ''
+    postalCode: '',
+    needsInvoice: false,
+    taxId: '',
+    invoiceName: ''
   });
 
   const [orderComplete, setOrderComplete] = useState(false);
   const [bizumModal, setBizumModal] = useState(false);
 
   const totalBottles = Object.values(quantities).reduce((a, b) => a + b, 0);
-  const bottlePrice = 8.0;
-  const shippingCost = 6.0;
+  const bottlePrice = 7.50; // 7,50 €
+  const shippingCost = 5.50; // 5,50 €
   const subtotal = totalBottles * bottlePrice;
   const grandTotal = subtotal > 0 ? subtotal + shippingCost : 0;
   const isPersonalizedUnlocked = totalBottles >= 6;
   const bottlesNeededForPersonalization = Math.max(0, 6 - totalBottles);
 
-  // Control de disparo de la gran explosión de confeti
   const wasUnlocked = useRef<boolean>(false);
 
   useEffect(() => {
@@ -79,7 +103,6 @@ export default function Home() {
 
       const triggerMassiveConfetti = () => {
         if (window.confetti) {
-          // Explosión doble masiva y amplia de lado a lado
           window.confetti({
             particleCount: 180,
             spread: 120,
@@ -134,10 +157,10 @@ export default function Home() {
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    setFormData({ ...formData, [e.target.name]: value });
   };
 
-  // FUNCIÓN PARA ABRIR LA PASARELA DE PAGO DE STRIPE (TARGETA, APPLE PAY, GOOGLE PAY)
   const handleStripeCheckout = async () => {
     setLoadingPayment(true);
     try {
@@ -152,6 +175,7 @@ export default function Home() {
           buyerEmail: formData.email,
           selectedBottles: quantities,
           selectedWineTypes: wineTypes,
+          invoiceData: formData.needsInvoice ? { taxId: formData.taxId, invoiceName: formData.invoiceName } : null
         }),
       });
 
@@ -226,7 +250,7 @@ export default function Home() {
       justifyContent: 'center',
       alignItems: 'flex-start',
       margin: 0,
-      padding: '40px 20px 140px 20px',
+      padding: '20px 20px 140px 20px',
       overflowX: 'hidden',
       position: 'relative',
       fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
@@ -404,7 +428,7 @@ export default function Home() {
       }}>
         
         {/* CAPÇALERA */}
-        <header style={{ width: '100%', textAlign: 'center', marginBottom: '36px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        <header ref={contentTopRef} style={{ width: '100%', textAlign: 'center', marginBottom: '36px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <img
             src="/LOGO_NEGRE.png"
             alt="El Cercle"
@@ -420,39 +444,41 @@ export default function Home() {
         </header>
 
         {/* NAVEGACIÓ */}
-        <nav style={{
-          display: 'flex',
-          gap: '16px',
-          marginBottom: '40px',
-          background: 'rgba(255, 255, 255, 0.08)',
-          padding: '16px 28px',
-          borderRadius: '100px',
-          borderTop: '2px solid rgba(255, 255, 255, 0.6)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.2)',
-          backdropFilter: 'blur(16px)',
-          boxShadow: '0 20px 40px rgba(0, 0, 0, 0.8)',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          justifyContent: 'center'
-        }}>
-          {[1, 2, 3, 4, 5].map(step => (
-            <button
-              key={step}
-              onClick={() => setCurrentStep(step)}
-              style={{
-                ...glassCircleStyle,
-                fontSize: '22px',
-                fontWeight: '800',
-                color: '#ffffff',
-                opacity: currentStep === step ? 1 : 0.5,
-                transform: currentStep === step ? 'scale(1.1)' : 'scale(1)',
-                border: currentStep === step ? '2.5px solid rgba(255, 255, 255, 0.95)' : '2px solid rgba(255, 255, 255, 0.4)'
-              }}
-            >
-              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', WebkitFontSmoothing: 'antialiased' }}>{step}</span>
-            </button>
-          ))}
-        </nav>
+        <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+          <nav style={{
+            display: 'flex',
+            gap: '16px',
+            marginBottom: '40px',
+            background: 'rgba(255, 255, 255, 0.08)',
+            padding: '16px 28px',
+            borderRadius: '100px',
+            borderTop: '2px solid rgba(255, 255, 255, 0.6)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.2)',
+            backdropFilter: 'blur(16px)',
+            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.8)',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            justifyContent: 'center'
+          }}>
+            {[1, 2, 3, 4, 5].map(step => (
+              <button
+                key={step}
+                onClick={() => setCurrentStep(step)}
+                style={{
+                  ...glassCircleStyle,
+                  fontSize: '22px',
+                  fontWeight: '800',
+                  color: '#ffffff',
+                  opacity: currentStep === step ? 1 : 0.5,
+                  transform: currentStep === step ? 'scale(1.1)' : 'scale(1)',
+                  border: currentStep === step ? '2.5px solid rgba(255, 255, 255, 0.95)' : '2px solid rgba(255, 255, 255, 0.4)'
+                }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', WebkitFontSmoothing: 'antialiased' }}>{step}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
 
         {/* MAIN */}
         <main style={{ width: '100%' }}>
@@ -468,7 +494,7 @@ export default function Home() {
                 L'ESÈNCIA D'UNA TERRA LLIURE
               </h2>
               <p style={{ fontSize: '19px', color: '#dddddd', lineHeight: '1.8', maxWidth: '750px', margin: 0 }}>
-                Us presentem una edició limitada i numerada de tan sols <strong>500 ampolles de col·lecció</strong> de la comarca de la <strong>Terra Alta</strong>. Cada ampolla és una peça única que duu el seu propi identificador i un codi QR exclusiu que desplega una experiència interactiva en <strong>Realitat Augmentada (WebAR)</strong> i el Certificat Oficial de Propietat en PDF.
+                Us presentem una edició limitada i numerada de tan sols <strong>500 ampolles de col·lecció</strong> de la comarca de la <strong>Terra Alta</strong> (<strong>7,50 € / ampolla</strong> + <strong>5,50 € d'enviament</strong>). Cada ampolla és una peça única que duu el seu propi identificador i un codi QR exclusiu que desplega una experiència interactiva en <strong>Realitat Augmentada (WebAR)</strong> i el Certificat Oficial de Propietat en PDF.
               </p>
 
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '16px', fontSize: '18px', fontFamily: 'monospace', color: '#d4af37', backgroundColor: '#000000', padding: '16px 32px', borderRadius: '24px', border: '1px solid #333' }}>
@@ -572,13 +598,11 @@ export default function Home() {
                 <span style={{ fontSize: '14px', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '3px', color: '#d4af37', fontWeight: 'bold' }}>PAS 3 DE 5</span>
                 <h3 style={{ fontSize: '34px', fontFamily: 'serif', margin: '8px 0 8px 0', color: '#ffffff', textTransform: 'uppercase' }}>SELECCIONA LES TEVES ETIQUETES</h3>
                 <p style={{ fontSize: '17px', color: '#ccc', margin: 0, maxWidth: '750px', marginLeft: 'auto', marginRight: 'auto', lineHeight: '1.5' }}>
-                  Tria l'etiqueta i el tipus de vi (BLANC o NEGRE) que vols que coloquem a cada ampolla, no hi ha cap límit, agafa els dissenys i les ampolles que tu vulguis (<strong style={{ color: '#d4af37' }}>8,00 €</strong> / AMPOLLA).
+                  Tria l'etiqueta i el tipus de vi (BLANC o NEGRE) que vols que coloquem a cada ampolla, no hi ha cap límit, agafa els dissenys i les ampolles que tu vulguis (<strong style={{ color: '#d4af37' }}>7,50 €</strong> / AMPOLLA).
                 </p>
               </div>
 
-              {/* BANNER CON ANIMACIÓN CONTINUA HASTA CAMBIAR DE PANTALLA */}
               <div
-                className={isPersonalizedUnlocked ? 'enhorabuena-pulse' : ''}
                 style={{
                   padding: '20px 24px',
                   borderRadius: '24px',
@@ -713,7 +737,7 @@ export default function Home() {
             </section>
           )}
 
-          {/* PAS 4: DADES DE CONTACTE I ENVIAMENT */}
+          {/* PAS 4: DADES DE CONTACTE, ENVIAMENT I FACTURACIÓ */}
           {currentStep === 4 && (
             <section style={{ ...glassCardStyle, padding: '40px 32px', display: 'flex', flexDirection: 'column', gap: '28px' }}>
               <div style={{ textAlign: 'center' }}>
@@ -826,6 +850,43 @@ export default function Home() {
                     style={{ backgroundColor: '#0a0a0a', border: '1px solid #333', borderRadius: '18px', padding: '18px', color: '#ffffff', fontSize: '17px', outline: 'none', boxSizing: 'border-box' }}
                   />
                 </div>
+
+                {/* --- SECCIÓ DE DADES DE FACTURACIÓ --- */}
+                <div style={{ marginTop: '10px', borderTop: '1px solid #333', paddingTop: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold', color: '#d4af37', textTransform: 'uppercase' }}>
+                    <input
+                      type="checkbox"
+                      name="needsInvoice"
+                      checked={formData.needsInvoice}
+                      onChange={handleInputChange}
+                      style={{ width: '20px', height: '20px', accentColor: '#d4af37', cursor: 'pointer' }}
+                    />
+                    Necessito factura amb dades fiscals (Empresa / Autònom)
+                  </label>
+
+                  {formData.needsInvoice && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', backgroundColor: '#0a0a0a', padding: '20px', borderRadius: '18px', border: '1px solid #333' }}>
+                      <input
+                        type="text"
+                        name="invoiceName"
+                        value={formData.invoiceName}
+                        onChange={handleInputChange}
+                        placeholder="RAÓ SOCIAL / NOM FISCAL *"
+                        style={{ backgroundColor: '#141414', border: '1px solid #444', borderRadius: '14px', padding: '16px', color: '#ffffff', fontSize: '16px', outline: 'none', textTransform: 'uppercase', boxSizing: 'border-box' }}
+                      />
+                      <input
+                        type="text"
+                        name="taxId"
+                        value={formData.taxId}
+                        onChange={handleInputChange}
+                        placeholder="NIF / CIF *"
+                        style={{ backgroundColor: '#141414', border: '1px solid #444', borderRadius: '14px', padding: '16px', color: '#ffffff', fontSize: '16px', outline: 'none', textTransform: 'uppercase', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                  )}
+                </div>
+                {/* ----------------------------------- */}
+
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '20px', paddingTop: '10px' }}>
@@ -874,6 +935,12 @@ export default function Home() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', color: '#d4af37', fontSize: '14px', borderTop: '1px solid #222', paddingTop: '10px' }}>
                     <span>CONTRAETIQUETA PERSONALITZADA PER A:</span>
                     <span style={{ fontWeight: 'bold' }}>{formData.customName || formData.fullName}</span>
+                  </div>
+                )}
+
+                {formData.needsInvoice && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', color: '#d4af37', fontSize: '14px', borderTop: '1px solid #222', paddingTop: '10px' }}>
+                    <span>FACTURA A NOM DE: <strong>{formData.invoiceName}</strong> (NIF/CIF: {formData.taxId})</span>
                   </div>
                 )}
 
