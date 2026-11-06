@@ -1,88 +1,145 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { calculateTotals, BOTTLE_PRICE_CENTS, SHIPPING_CENTS } from '../../../lib/pricing';
+import { createOrder, linkStripeSession, updateOrder } from '../../../lib/orders';
+import { getStock } from '../../../lib/campaign';
+import { parseCheckoutBody, ValidationError } from '../../../lib/validation';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
+
+function siteOrigin(request: Request): string {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL;
+  if (configured) return configured.replace(/\/$/, '');
+  const origin = request.headers.get('origin');
+  if (origin) return origin.replace(/\/$/, '');
+  return 'https://www.alliberamelcercle.digital';
+}
 
 export async function POST(request: Request) {
+  let createdOrderId: string | null = null;
+
   try {
+    const secretKey = process.env.STRIPE_SECRET_KEY;
+    if (!secretKey) {
+      return NextResponse.json(
+        { success: false, error: 'La passarel·la de pagament no està configurada.' },
+        { status: 500 }
+      );
+    }
+
     const body = await request.json();
-    const { buyerName, buyerCustomName, buyerEmail, selectedBottles } = body;
+    const input = parseCheckoutBody(body);
 
-    if (!buyerName || !buyerEmail || !selectedBottles) {
+    const stock = await getStock();
+    if (!stock.salesOpen) {
       return NextResponse.json(
-        { success: false, error: 'Dades incompletes per processar el pagament.' },
-        { status: 400 }
+        { success: false, error: 'Les vendes estan temporalment tancades. Torna-ho a provar aviat.' },
+        { status: 409 }
       );
     }
 
-    // Calcular la quantitat total d'ampolles de manera segura tant si ve com a objecte o array
-    const quantity = typeof selectedBottles === 'object' && !Array.isArray(selectedBottles)
-      ? Object.values(selectedBottles).reduce((a: any, b: any) => a + Number(b), 0)
-      : Array.isArray(selectedBottles) ? selectedBottles.length : 0;
+    const totals = calculateTotals(input.totalBottles);
 
-    if (quantity === 0) {
-      return NextResponse.json(
-        { success: false, error: 'Heu de seleccionar almenys una ampolla.' },
-        { status: 400 }
-      );
-    }
+    const order = await createOrder({
+      status: 'pending_payment',
+      paymentMethod: 'stripe',
+      customer: input.customer,
+      invoice: input.invoice,
+      quantities: input.quantities,
+      wineTypes: input.wineTypes,
+      items: [],
+      subtotal: totals.subtotalCents,
+      shipping: totals.shippingCents,
+      total: totals.totalCents,
+      currency: 'EUR',
+      personalizedName: input.personalizedName,
+      acceptsTerms: input.acceptsTerms,
+      marketingConsent: input.marketingConsent,
+    });
+    createdOrderId = order.id;
 
-    // Convertir l'objecte de selecció en un text llegible per a la descripció de Stripe
-    const selectionDescription = typeof selectedBottles === 'object' && !Array.isArray(selectedBottles)
-      ? Object.entries(selectedBottles)
-          .filter(([_, qty]) => Number(qty) > 0)
-          .map(([id, qty]) => `${id} (${qty})`)
-          .join(', ')
-      : Array.isArray(selectedBottles) ? selectedBottles.join(', ') : '';
+    const stripe = new Stripe(secretKey);
+    const origin = siteOrigin(request);
+    const selection = Object.entries(input.quantities)
+      .filter(([, quantity]) => quantity > 0)
+      .map(([id, quantity]) => `${id} x${quantity}`)
+      .join(', ');
 
-    const origin = request.headers.get('origin') || 'https://alliberamelcercle.digital';
-
-    // Determinar el nom final per a la contraetiqueta/certificat
-    const finalBuyerName = buyerCustomName || buyerName;
-
-    // Crear la sessió de Stripe Checkout
     const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      locale: 'ca',
+      customer_email: input.customer.email,
+      client_reference_id: order.id,
+      metadata: { orderId: order.id },
       line_items: [
         {
           price_data: {
             currency: 'eur',
             product_data: {
-              name: `El Cercle - Edició Commemorativa 2026 (${quantity} ${quantity === 1 ? 'ampolla' : 'ampolles'})`,
-              description: `Selecció: ${selectionDescription}`,
+              name: `El Cercle · Edició Commemorativa 2026 (${input.totalBottles} ${
+                input.totalBottles === 1 ? 'ampolla' : 'ampolles'
+              })`,
+              description: `Selecció: ${selection}`,
             },
-            unit_amount: 750, // 7,50 € per ampolla (en cèntims)
+            unit_amount: BOTTLE_PRICE_CENTS,
           },
-          quantity: quantity,
+          quantity: input.totalBottles,
         },
       ],
       shipping_options: [
         {
           shipping_rate_data: {
             type: 'fixed_amount',
-            fixed_amount: {
-              amount: 550, // 5,50 € de despeses d'enviament (en cèntims)
-              currency: 'eur',
-            },
-            display_name: 'Enviament Estàndard (Península i Balears)',
+            fixed_amount: { amount: SHIPPING_CENTS, currency: 'eur' },
+            display_name: 'Enviament estàndard (Península i Balears)',
           },
         },
       ],
-      mode: 'payment',
-      customer_email: buyerEmail,
-      metadata: {
-        buyerName: finalBuyerName.toUpperCase(),
-        buyerEmail: buyerEmail,
-        selectedBottles: JSON.stringify(selectedBottles),
-      },
+      billing_address_collection: 'auto',
+      allow_promotion_codes: false,
       success_url: `${origin}/gracies?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/`,
+      cancel_url: `${origin}/?cancel=1`,
     } as Stripe.Checkout.SessionCreateParams);
 
-    return NextResponse.json({ success: true, url: session.url });
-  } catch (error: any) {
-    console.error('Error al crear la sessió de checkout de Stripe:', error);
+    if (!session.url) throw new Error('Stripe no ha retornat la URL de pagament.');
+
+    const updated = await updateOrder(order.id, (current) => ({
+      ...current,
+      stripeSessionId: session.id,
+    }));
+
+    try {
+      await linkStripeSession(session.id, updated.id);
+    } catch (error) {
+      if ((error as { name?: string })?.name !== 'AlreadyExistsError') throw error;
+    }
+
+    return NextResponse.json({ success: true, url: session.url, orderId: updated.id });
+  } catch (error) {
+    if (createdOrderId) {
+      try {
+        await updateOrder(createdOrderId, (order) => ({
+          ...order,
+          status: 'cancelled',
+          cancelledAt: new Date().toISOString(),
+        }));
+      } catch (updateError) {
+        console.error('No se ha podido cancelar el pedido tras fallar Stripe:', updateError);
+      }
+    }
+
+    if (error instanceof ValidationError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    }
+
+    console.error('Error al crear la sessió de checkout:', error);
     return NextResponse.json(
-      { success: false, error: error.message || 'Error en el servidor de pagament.' },
+      {
+        success: false,
+        error:
+          'No hem pogut obrir la passarel·la de pagament. Torna-ho a provar o contacta amb nosaltres.',
+      },
       { status: 500 }
     );
   }

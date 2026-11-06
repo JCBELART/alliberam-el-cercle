@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import SiteFooter from '../components/SiteFooter';
 
 declare global {
   interface Window {
@@ -88,6 +89,21 @@ export default function Home() {
   const [orderComplete, setOrderComplete] = useState(false);
   const [bizumModal, setBizumModal] = useState(false);
 
+  const [stock, setStock] = useState<{
+    available: number;
+    total: number;
+    sold: number;
+    batch: number;
+    totalSold: number;
+    salesOpen: boolean;
+  } | null>(null);
+  const [stockStale, setStockStale] = useState(false);
+  const [acceptsTerms, setAcceptsTerms] = useState(false);
+  const [marketingConsent, setMarketingConsent] = useState(false);
+  const [manualLoading, setManualLoading] = useState(false);
+  const [manualOrder, setManualOrder] = useState<{ id: string; message: string; total: number } | null>(null);
+  const [manualError, setManualError] = useState<string | null>(null);
+
   const totalBottles = Object.values(quantities).reduce((a, b) => a + b, 0);
   const bottlePrice = 7.50;
   const shippingCost = 5.50;
@@ -143,11 +159,66 @@ export default function Home() {
     }
   }, [isPersonalizedUnlocked]);
 
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem('elcercle_age') === '1') setAgeVerified(true);
+      if (window.localStorage.getItem('elcercle_cookies') === '1') setCookiesChoice(true);
+    } catch {
+      // almacenamiento no disponible
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadStock = async () => {
+      try {
+        const response = await fetch('/api/stock', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error('stock');
+        if (active) {
+          setStock(data);
+          setStockStale(false);
+        }
+      } catch {
+        if (active) setStockStale(true);
+      }
+    };
+    loadStock();
+    const timer = setInterval(loadStock, 30000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const availableNow = stock ? stock.available : 500;
+  const salesOpen = stock ? stock.salesOpen : true;
+
+  const handleAgeVerified = () => {
+    setAgeVerified(true);
+    try {
+      window.localStorage.setItem('elcercle_age', '1');
+    } catch {
+      // almacenamiento no disponible
+    }
+  };
+
+  const handleCookies = (choice: 'all' | 'necessary') => {
+    setCookiesChoice(true);
+    try {
+      window.localStorage.setItem('elcercle_cookies', choice);
+    } catch {
+      // almacenamiento no disponible
+    }
+  };
+
   const handleQuantityChange = (id: string, delta: number) => {
-    setQuantities(prev => ({
-      ...prev,
-      [id]: Math.max(0, (prev[id] || 0) + delta)
-    }));
+    setQuantities(prev => {
+      const next = Math.max(0, (prev[id] || 0) + delta);
+      const currentTotal = Object.values(prev).reduce((a, b) => a + b, 0);
+      if (delta > 0 && currentTotal >= availableNow) return prev;
+      return { ...prev, [id]: next };
+    });
   };
 
   const handleWineTypeChange = (id: string, type: 'BLANC' | 'NEGRE') => {
@@ -162,28 +233,45 @@ export default function Home() {
     setFormData({ ...formData, [e.target.name]: value });
   };
 
+  const buildOrderPayload = () => ({
+    quantities,
+    wineTypes,
+    customer: {
+      name: formData.fullName,
+      email: formData.email,
+      phone: formData.phone,
+      address: formData.address,
+      city: formData.city,
+      postalCode: formData.postalCode,
+      country: 'ES',
+    },
+    invoice: formData.needsInvoice
+      ? {
+          invoiceName: formData.invoiceName,
+          taxId: formData.taxId,
+          invoiceAddress: formData.invoiceAddress,
+          invoiceCity: formData.invoiceCity,
+          invoicePostalCode: formData.invoicePostalCode,
+        }
+      : null,
+    needsInvoice: formData.needsInvoice,
+    personalizedName: formData.customName || formData.fullName,
+    acceptsTerms,
+    marketingConsent,
+    totalBottles,
+  });
+
   const handleStripeCheckout = async () => {
+    if (!acceptsTerms) {
+      alert('Has d’acceptar les condicions de compra i la política de privacitat.');
+      return;
+    }
     setLoadingPayment(true);
     try {
       const response = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          totalBottles,
-          grandTotal,
-          buyerName: formData.fullName,
-          buyerCustomName: formData.customName || formData.fullName,
-          buyerEmail: formData.email,
-          selectedBottles: quantities,
-          selectedWineTypes: wineTypes,
-          invoiceData: formData.needsInvoice ? {
-            taxId: formData.taxId,
-            invoiceName: formData.invoiceName,
-            invoiceAddress: formData.invoiceAddress,
-            invoiceCity: formData.invoiceCity,
-            invoicePostalCode: formData.invoicePostalCode
-          } : null
-        }),
+        body: JSON.stringify(buildOrderPayload()),
       });
 
       const data = await response.json();
@@ -196,7 +284,43 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Error en el pagament:', error);
+      alert('No hem pogut connectar amb la passarel·la de pagament. Torna-ho a provar.');
       setLoadingPayment(false);
+    }
+  };
+
+  const handleManualOrder = async () => {
+    if (!acceptsTerms) {
+      setManualError('Has d’acceptar les condicions de compra i la política de privacitat.');
+      return;
+    }
+    setManualLoading(true);
+    setManualError(null);
+    try {
+      const response = await fetch('/api/manual-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...buildOrderPayload(), channel: 'bizum' }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || 'No hem pogut registrar la comanda.');
+      }
+      setManualOrder({ id: data.orderId, message: data.message, total: data.total });
+      setStock((current) =>
+        current
+          ? {
+              ...current,
+              available: Math.max(0, current.available - totalBottles),
+              sold: current.sold + totalBottles,
+              totalSold: current.totalSold + totalBottles,
+            }
+          : current
+      );
+    } catch (error) {
+      setManualError(error instanceof Error ? error.message : 'Error desconegut.');
+    } finally {
+      setManualLoading(false);
     }
   };
 
@@ -374,7 +498,7 @@ export default function Home() {
                 NO
               </button>
               <button
-                onClick={() => setAgeVerified(true)}
+                onClick={handleAgeVerified}
                 style={{
                   backgroundColor: '#333333',
                   color: '#ffffff',
@@ -391,7 +515,7 @@ export default function Home() {
               </button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#2e7d32', fontWeight: '600', marginTop: '5px' }}>
-              <span>✓</span> Recorda'm
+              <span>✓</span> Recordarem la teva confirmació en aquest navegador
             </div>
           </div>
         </div>
@@ -504,9 +628,26 @@ export default function Home() {
                 Us presentem una edició limitada i numerada de tan sols <strong>500 ampolles de col·lecció</strong> de la comarca de la <strong>Terra Alta</strong> (<strong>7,50 € / ampolla</strong> + <strong>5,50 € d'enviament</strong>). Cada ampolla és una peça única que duu el seu propi identificador i un codi QR exclusiu que desplega una experiència interactiva en <strong>Realitat Augmentada (WebAR)</strong> i el Certificat Oficial de Propietat en PDF.
               </p>
 
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '16px', fontSize: '18px', fontFamily: 'monospace', color: '#d4af37', backgroundColor: '#000000', padding: '16px 32px', borderRadius: '24px', border: '1px solid #333' }}>
-                <span style={{ color: '#aaa' }}>BOTELLES DISPONIBLES:</span>
-                <span style={{ color: '#ffffff', fontWeight: 'bold', fontSize: '22px' }}>342 / 500</span>
+              <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: '6px', fontSize: '18px', fontFamily: 'monospace', color: '#d4af37', backgroundColor: '#000000', padding: '16px 32px', borderRadius: '24px', border: '1px solid #333' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '16px' }}>
+                  <span style={{ color: '#aaa' }}>BOTELLES DISPONIBLES:</span>
+                  <span style={{ color: '#ffffff', fontWeight: 'bold', fontSize: '22px' }}>
+                    {stock ? stock.available : '—'} / {stock ? stock.total : 500}
+                  </span>
+                </div>
+                <span style={{ fontSize: '11px', color: '#7a7a7a', letterSpacing: '1px' }}>
+                  {stock ? `TIRADA ${stock.batch} · ${stock.totalSold} AMPOLLES VENUDES EN TOTAL` : 'CARREGANT DISPONIBILITAT...'}
+                </span>
+                {!salesOpen ? (
+                  <span style={{ fontSize: '12px', color: '#f87171', fontWeight: 700 }}>
+                    VENDES TEMPORALMENT TANCADES
+                  </span>
+                ) : null}
+                {stockStale ? (
+                  <span style={{ fontSize: '11px', color: '#facc15' }}>
+                    No hem pogut actualitzar l_estoc. Es mostrarà el darrer valor conegut.
+                  </span>
+                ) : null}
               </div>
 
               <button
@@ -605,7 +746,7 @@ export default function Home() {
                 <span style={{ fontSize: '14px', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '3px', color: '#d4af37', fontWeight: 'bold' }}>PAS 3 DE 5</span>
                 <h3 style={{ fontSize: '34px', fontFamily: 'serif', margin: '8px 0 8px 0', color: '#ffffff', textTransform: 'uppercase' }}>SELECCIONA LES TEVES ETIQUETES</h3>
                 <p style={{ fontSize: '16px', color: '#ccc', margin: 0, maxWidth: '780px', marginLeft: 'auto', marginRight: 'auto', lineHeight: '1.5' }}>
-                  Tria l'etiqueta i tipus de vi (BLANC o NEGRE) per a cada ampolla sense límit (<strong style={{ color: '#d4af37' }}>7,50 €</strong> / AMPOLLA).
+                  Tria l&apos;etiqueta i tipus de vi (BLANC o NEGRE) per a cada ampolla (<strong style={{ color: '#d4af37' }}>7,50 €</strong> / AMPOLLA). Queden <strong style={{ color: '#ffffff' }}>{availableNow}</strong> ampolles en aquesta tirada.
                 </p>
               </div>
 
@@ -735,8 +876,8 @@ export default function Home() {
                 </button>
                 <button
                   onClick={() => setCurrentStep(4)}
-                  disabled={totalBottles === 0}
-                  style={{ ...glassButtonStyle, padding: '18px 36px', fontSize: '16px', opacity: totalBottles === 0 ? 0.4 : 1, cursor: totalBottles === 0 ? 'not-allowed' : 'pointer' }}
+                  disabled={totalBottles === 0 || !salesOpen}
+                  style={{ ...glassButtonStyle, padding: '18px 36px', fontSize: '16px', opacity: totalBottles === 0 || !salesOpen ? 0.4 : 1, cursor: totalBottles === 0 || !salesOpen ? 'not-allowed' : 'pointer' }}
                 >
                   SEGÜENT: DADES D'ENVIAMENT
                 </button>
@@ -933,13 +1074,13 @@ export default function Home() {
                 </button>
                 <button
                   onClick={() => setCurrentStep(5)}
-                  disabled={!formData.fullName || !formData.email || !formData.address || !formData.phone}
+                  disabled={!formData.fullName || !formData.email || !formData.address || !formData.phone || !formData.city || !formData.postalCode}
                   style={{
                     ...glassButtonStyle,
                     padding: '18px 36px',
                     fontSize: '16px',
-                    opacity: (!formData.fullName || !formData.email || !formData.address || !formData.phone) ? 0.4 : 1,
-                    cursor: (!formData.fullName || !formData.email || !formData.address || !formData.phone) ? 'not-allowed' : 'pointer'
+                    opacity: (!formData.fullName || !formData.email || !formData.address || !formData.phone || !formData.city || !formData.postalCode) ? 0.4 : 1,
+                    cursor: (!formData.fullName || !formData.email || !formData.address || !formData.phone || !formData.city || !formData.postalCode) ? 'not-allowed' : 'pointer'
                   }}
                 >
                   SEGÜENT: RESUM DE LA COMANDA
@@ -986,27 +1127,71 @@ export default function Home() {
                 </div>
               </div>
 
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', backgroundColor: '#0a0a0a', border: '1px solid #262626', borderRadius: '18px', padding: '20px' }}>
+                <label style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', cursor: 'pointer', fontSize: '14px', color: '#d6d6d6', lineHeight: 1.6 }}>
+                  <input
+                    type="checkbox"
+                    checked={acceptsTerms}
+                    onChange={(event) => setAcceptsTerms(event.target.checked)}
+                    style={{ width: '20px', height: '20px', accentColor: '#d4af37', marginTop: '2px', cursor: 'pointer', flexShrink: 0 }}
+                  />
+                  <span>
+                    Accepto les{' '}
+                    <a href="/condiciones" target="_blank" rel="noreferrer" style={{ color: '#d4af37' }}>condicions de compra</a>, la{' '}
+                    <a href="/privacidad" target="_blank" rel="noreferrer" style={{ color: '#d4af37' }}>política de privacitat</a> i el{' '}
+                    <a href="/desistimiento" target="_blank" rel="noreferrer" style={{ color: '#d4af37' }}>dret de desistiment</a>. Confirmo que sóc major de 18 anys.
+                  </span>
+                </label>
+                <label style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', cursor: 'pointer', fontSize: '14px', color: '#a9a9a9', lineHeight: 1.6 }}>
+                  <input
+                    type="checkbox"
+                    checked={marketingConsent}
+                    onChange={(event) => setMarketingConsent(event.target.checked)}
+                    style={{ width: '20px', height: '20px', accentColor: '#d4af37', marginTop: '2px', cursor: 'pointer', flexShrink: 0 }}
+                  />
+                  <span>Vull rebre novetats d&apos;El Cercle i properes edicions (opcional).</span>
+                </label>
+              </div>
+
+              {totalBottles > availableNow ? (
+                <p style={{ margin: 0, color: '#f87171', fontSize: '13px', textAlign: 'center' }}>
+                  Només queden {availableNow} ampolles. Redueix la quantitat abans de pagar.
+                </p>
+              ) : null}
+
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <button
-                  onClick={() => setBizumModal(true)}
-                  style={{ ...glassButtonStyle, padding: '20px', fontSize: '18px', backgroundColor: 'rgba(0, 168, 150, 0.25)', border: '2px solid #00a896' }}
+                  onClick={() => { setManualError(null); setBizumModal(true); }}
+                  disabled={!acceptsTerms || !salesOpen}
+                  style={{ ...glassButtonStyle, padding: '20px', fontSize: '18px', backgroundColor: 'rgba(0, 168, 150, 0.25)', border: '2px solid #00a896', opacity: !acceptsTerms || !salesOpen ? 0.45 : 1, cursor: !acceptsTerms || !salesOpen ? 'not-allowed' : 'pointer' }}
                 >
                   PAGAR AMB BIZUM (MÒBIL: 640 543 624)
                 </button>
                 <button
                   onClick={handleStripeCheckout}
-                  disabled={loadingPayment}
-                  style={{ ...glassButtonStyle, padding: '20px', fontSize: '18px' }}
+                  disabled={loadingPayment || !acceptsTerms || !salesOpen}
+                  style={{ ...glassButtonStyle, padding: '20px', fontSize: '18px', opacity: loadingPayment || !acceptsTerms || !salesOpen ? 0.45 : 1, cursor: loadingPayment || !acceptsTerms || !salesOpen ? 'not-allowed' : 'pointer' }}
                 >
                   {loadingPayment ? 'OBRINT PASARELA...' : 'PAGAR AMB APPLE PAY / GOOGLE PAY'}
                 </button>
                 <button
                   onClick={handleStripeCheckout}
-                  disabled={loadingPayment}
-                  style={{ ...glassButtonStyle, padding: '20px', fontSize: '18px' }}
+                  disabled={loadingPayment || !acceptsTerms || !salesOpen}
+                  style={{ ...glassButtonStyle, padding: '20px', fontSize: '18px', opacity: loadingPayment || !acceptsTerms || !salesOpen ? 0.45 : 1, cursor: loadingPayment || !acceptsTerms || !salesOpen ? 'not-allowed' : 'pointer' }}
                 >
                   {loadingPayment ? 'OBRINT STRIPE...' : 'PAGAR AMB TARGETA DE CRÈDIT (STRIPE)'}
                 </button>
+                <a
+                  href="/whatsapp"
+                  style={{ ...glassButtonStyle, padding: '18px', fontSize: '15px', textAlign: 'center', textDecoration: 'none', display: 'block' }}
+                >
+                  PREFEREIXES DEMANAR PER WHATSAPP?
+                </a>
+                {!acceptsTerms ? (
+                  <p style={{ margin: 0, color: '#8a8a8a', fontSize: '12px', textAlign: 'center' }}>
+                    Marca la casella de condicions per activar el pagament.
+                  </p>
+                ) : null}
               </div>
 
               <button
@@ -1019,6 +1204,8 @@ export default function Home() {
           )}
 
         </main>
+
+        <SiteFooter />
       </div>
 
       {/* MODAL DE BIZUM */}
@@ -1036,22 +1223,68 @@ export default function Home() {
         }}>
           <div style={{ ...glassCardStyle, padding: '40px 30px', maxWidth: '480px', width: '100%', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <span style={{ fontSize: '48px' }}>📲</span>
-            <h4 style={{ fontSize: '28px', fontFamily: 'serif', margin: 0, color: '#00a896', textTransform: 'uppercase' }}>PAGAMENT AMB BIZUM</h4>
-            <p style={{ fontSize: '16px', color: '#ffffff', lineHeight: '1.6', margin: 0 }}>
-              Per finalitzar la comanda de <strong>{grandTotal.toFixed(2)} €</strong>, realitza un Bizum al següent número de mòbil:
-            </p>
-            <div style={{ backgroundColor: '#000', border: '2px solid #00a896', padding: '16px', borderRadius: '16px', fontSize: '24px', fontWeight: 'bold', color: '#00a896', letterSpacing: '2px' }}>
-              640 543 624
-            </div>
-            <p style={{ fontSize: '14px', color: '#facc15', fontWeight: 'bold', margin: 0, textTransform: 'uppercase' }}>
-              Molt important: Posa el teu NOM I COGNOMS COMPLETS com a concepte del Bizum per identificar la teva comanda.
-            </p>
-            <button
-              onClick={() => { setBizumModal(false); setOrderComplete(true); }}
-              style={{ ...glassButtonStyle, padding: '16px', fontSize: '16px', marginTop: '10px' }}
-            >
-              HE REALITZAT EL BIZUM - CONFIRMAR
-            </button>
+            <h4 style={{ fontSize: '28px', fontFamily: 'serif', margin: 0, color: manualOrder ? '#4ade80' : '#00a896', textTransform: 'uppercase' }}>
+              {manualOrder ? 'COMANDA RESERVADA' : 'PAGAMENT AMB BIZUM'}
+            </h4>
+
+            {manualOrder ? (
+              <>
+                <p style={{ fontSize: '15px', color: '#dddddd', lineHeight: 1.6, margin: 0 }}>
+                  Hem reservat les teves ampolles. Ara fes el Bizum de{' '}
+                  <strong style={{ color: '#ffffff' }}>{(manualOrder.total / 100).toFixed(2).replace('.', ',')} €</strong>{' '}
+                  al número:
+                </p>
+                <div style={{ backgroundColor: '#000', border: '2px solid #00a896', padding: '14px', borderRadius: '16px', fontSize: '24px', fontWeight: 'bold', color: '#00a896', letterSpacing: '2px' }}>
+                  640 543 624
+                </div>
+                <div style={{ backgroundColor: '#111111', border: '1px solid #333333', borderRadius: '14px', padding: '14px', textAlign: 'left', fontSize: '13px', color: '#cccccc', lineHeight: 1.7 }}>
+                  <div><strong style={{ color: '#d4af37' }}>Concepte:</strong> {manualOrder.id}</div>
+                  <div><strong style={{ color: '#d4af37' }}>Import:</strong> {(manualOrder.total / 100).toFixed(2).replace('.', ',')} €</div>
+                  <div><strong style={{ color: '#d4af37' }}>Referència:</strong> {manualOrder.id}</div>
+                </div>
+                <p style={{ fontSize: '13px', color: '#facc15', lineHeight: 1.6, margin: 0 }}>
+                  Quan verifiquem l&apos;arribada del Bizum, assignarem els números de sèrie i t&apos;enviarem el certificat per correu. Si no el rebem en 48 h, la reserva caducarà.
+                </p>
+                <button
+                  onClick={() => { setBizumModal(false); setManualOrder(null); setCurrentStep(1); setQuantities({ barcelona: 0, girona: 0, lleida: 0, segadors: 0, tarragona: 0, bruc: 0 }); }}
+                  style={{ ...glassButtonStyle, padding: '16px', fontSize: '15px', marginTop: '4px' }}
+                >
+                  ENTESOS, TORNAR A L'INICI
+                </button>
+              </>
+            ) : (
+              <>
+                <p style={{ fontSize: '16px', color: '#ffffff', lineHeight: '1.6', margin: 0 }}>
+                  Per finalitzar la comanda de <strong>{grandTotal.toFixed(2)} €</strong>, realitza un Bizum al següent número de mòbil:
+                </p>
+                <div style={{ backgroundColor: '#000', border: '2px solid #00a896', padding: '16px', borderRadius: '16px', fontSize: '24px', fontWeight: 'bold', color: '#00a896', letterSpacing: '2px' }}>
+                  640 543 624
+                </div>
+                <div style={{ backgroundColor: '#111111', border: '1px solid #333333', borderRadius: '14px', padding: '14px', textAlign: 'left', fontSize: '13px', color: '#cccccc', lineHeight: 1.7 }}>
+                  <div><strong style={{ color: '#d4af37' }}>Import:</strong> {grandTotal.toFixed(2).replace('.', ',')} €</div>
+                  <div><strong style={{ color: '#d4af37' }}>Concepte:</strong> {formData.fullName || 'EL TEU NOM I COGNOMS'}</div>
+                </div>
+                <p style={{ fontSize: '13px', color: '#facc15', fontWeight: 'bold', margin: 0, lineHeight: 1.6 }}>
+                  Molt important: posa el teu NOM I COGNOMS COMPLETS al concepte del Bizum. La comanda no s&apos;enviarà fins que verifiquem manualment el pagament.
+                </p>
+                {manualError ? (
+                  <p style={{ fontSize: '13px', color: '#f87171', margin: 0 }}>{manualError}</p>
+                ) : null}
+                <button
+                  onClick={handleManualOrder}
+                  disabled={manualLoading}
+                  style={{ ...glassButtonStyle, padding: '16px', fontSize: '15px', marginTop: '4px', opacity: manualLoading ? 0.6 : 1 }}
+                >
+                  {manualLoading ? 'RESERVANT COMANDA...' : 'HE FET EL BIZUM - RESERVAR COMANDA'}
+                </button>
+                <button
+                  onClick={() => setBizumModal(false)}
+                  style={{ background: 'transparent', border: '1px solid #444444', color: '#aaaaaa', padding: '12px', borderRadius: '100px', cursor: 'pointer', fontSize: '13px', textTransform: 'uppercase' }}
+                >
+                  Enrere
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1143,7 +1376,7 @@ export default function Home() {
           </p>
           <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
-              onClick={() => setCookiesChoice(true)}
+              onClick={() => handleCookies('all')}
               style={{
                 backgroundColor: '#1565c0',
                 color: '#ffffff',
@@ -1159,7 +1392,7 @@ export default function Home() {
               ACCEPTA
             </button>
             <button
-              onClick={() => setCookiesChoice(true)}
+              onClick={() => handleCookies('necessary')}
               style={{
                 backgroundColor: '#1565c0',
                 color: '#ffffff',
@@ -1175,7 +1408,7 @@ export default function Home() {
               REBUTJA
             </button>
             <button
-              onClick={() => setCookiesChoice(true)}
+              onClick={() => handleCookies('necessary')}
               style={{
                 backgroundColor: 'transparent',
                 color: '#ffffff',
