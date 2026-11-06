@@ -31,17 +31,15 @@ export default function Home() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [loadingPayment, setLoadingPayment] = useState<boolean>(false);
 
-  const contentTopRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (currentStep === 1) {
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
       const timer = setTimeout(() => {
-        if (contentTopRef.current) {
-          const elementPosition = contentTopRef.current.getBoundingClientRect().top;
+        if (navRef.current) {
+          const elementPosition = navRef.current.getBoundingClientRect().top;
           const offsetPosition = elementPosition + window.pageYOffset - 20;
           window.scrollTo({
             top: offsetPosition,
@@ -81,15 +79,18 @@ export default function Home() {
     postalCode: '',
     needsInvoice: false,
     taxId: '',
-    invoiceName: ''
+    invoiceName: '',
+    invoiceAddress: '',
+    invoiceCity: '',
+    invoicePostalCode: ''
   });
 
   const [orderComplete, setOrderComplete] = useState(false);
   const [bizumModal, setBizumModal] = useState(false);
 
   const totalBottles = Object.values(quantities).reduce((a, b) => a + b, 0);
-  const bottlePrice = 7.50; // 7,50 €
-  const shippingCost = 5.50; // 5,50 €
+  const bottlePrice = 7.50;
+  const shippingCost = 5.50;
   const subtotal = totalBottles * bottlePrice;
   const grandTotal = subtotal > 0 ? subtotal + shippingCost : 0;
   const isPersonalizedUnlocked = totalBottles >= 6;
@@ -175,7 +176,13 @@ export default function Home() {
           buyerEmail: formData.email,
           selectedBottles: quantities,
           selectedWineTypes: wineTypes,
-          invoiceData: formData.needsInvoice ? { taxId: formData.taxId, invoiceName: formData.invoiceName } : null
+          invoiceData: formData.needsInvoice ? {
+            taxId: formData.taxId,
+            invoiceName: formData.invoiceName,
+            invoiceAddress: formData.invoiceAddress,
+            invoiceCity: formData.invoiceCity,
+            invoicePostalCode: formData.invoicePostalCode
+          } : null
         }),
       });
 
@@ -428,7 +435,7 @@ export default function Home() {
       }}>
         
         {/* CAPÇALERA */}
-        <header ref={contentTopRef} style={{ width: '100%', textAlign: 'center', marginBottom: '36px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        <header style={{ width: '100%', textAlign: 'center', marginBottom: '36px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <img
             src="/LOGO_NEGRE.png"
             alt="El Cercle"
@@ -444,7 +451,7 @@ export default function Home() {
         </header>
 
         {/* NAVEGACIÓ */}
-        <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+        <div ref={navRef} style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
           <nav style={{
             display: 'flex',
             gap: '16px',
@@ -597,8 +604,8 @@ export default function Home() {
               <div style={{ textAlign: 'center' }}>
                 <span style={{ fontSize: '14px', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: '3px', color: '#d4af37', fontWeight: 'bold' }}>PAS 3 DE 5</span>
                 <h3 style={{ fontSize: '34px', fontFamily: 'serif', margin: '8px 0 8px 0', color: '#ffffff', textTransform: 'uppercase' }}>SELECCIONA LES TEVES ETIQUETES</h3>
-                <p style={{ fontSize: '17px', color: '#ccc', margin: 0, maxWidth: '750px', marginLeft: 'auto', marginRight: 'auto', lineHeight: '1.5' }}>
-                  Tria l'etiqueta i el tipus de vi (BLANC o NEGRE) que vols que coloquem a cada ampolla, no hi ha cap límit, agafa els dissenys i les ampolles que tu vulguis (<strong style={{ color: '#d4af37' }}>7,50 €</strong> / AMPOLLA).
+                <p style={{ fontSize: '16px', color: '#ccc', margin: 0, maxWidth: '780px', marginLeft: 'auto', marginRight: 'auto', lineHeight: '1.5' }}>
+                  Tria l'etiqueta i tipus de vi (BLANC o NEGRE) per a cada ampolla sense límit (<strong style={{ color: '#d4af37' }}>7,50 €</strong> / AMPOLLA).
                 </p>
               </div>
 
@@ -865,23 +872,51 @@ export default function Home() {
                   </label>
 
                   {formData.needsInvoice && (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', backgroundColor: '#0a0a0a', padding: '20px', borderRadius: '18px', border: '1px solid #333' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', backgroundColor: '#0a0a0a', padding: '20px', borderRadius: '18px', border: '1px solid #333' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <input
+                          type="text"
+                          name="invoiceName"
+                          value={formData.invoiceName}
+                          onChange={handleInputChange}
+                          placeholder="RAÓ SOCIAL / NOM FISCAL *"
+                          style={{ backgroundColor: '#141414', border: '1px solid #444', borderRadius: '14px', padding: '16px', color: '#ffffff', fontSize: '16px', outline: 'none', textTransform: 'uppercase', boxSizing: 'border-box' }}
+                        />
+                        <input
+                          type="text"
+                          name="taxId"
+                          value={formData.taxId}
+                          onChange={handleInputChange}
+                          placeholder="NIF / CIF *"
+                          style={{ backgroundColor: '#141414', border: '1px solid #444', borderRadius: '14px', padding: '16px', color: '#ffffff', fontSize: '16px', outline: 'none', textTransform: 'uppercase', boxSizing: 'border-box' }}
+                        />
+                      </div>
                       <input
                         type="text"
-                        name="invoiceName"
-                        value={formData.invoiceName}
+                        name="invoiceAddress"
+                        value={formData.invoiceAddress}
                         onChange={handleInputChange}
-                        placeholder="RAÓ SOCIAL / NOM FISCAL *"
+                        placeholder="ADREÇA FISCAL (EMPRESA) *"
                         style={{ backgroundColor: '#141414', border: '1px solid #444', borderRadius: '14px', padding: '16px', color: '#ffffff', fontSize: '16px', outline: 'none', textTransform: 'uppercase', boxSizing: 'border-box' }}
                       />
-                      <input
-                        type="text"
-                        name="taxId"
-                        value={formData.taxId}
-                        onChange={handleInputChange}
-                        placeholder="NIF / CIF *"
-                        style={{ backgroundColor: '#141414', border: '1px solid #444', borderRadius: '14px', padding: '16px', color: '#ffffff', fontSize: '16px', outline: 'none', textTransform: 'uppercase', boxSizing: 'border-box' }}
-                      />
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <input
+                          type="text"
+                          name="invoiceCity"
+                          value={formData.invoiceCity}
+                          onChange={handleInputChange}
+                          placeholder="POBLACIÓ FISCAL *"
+                          style={{ backgroundColor: '#141414', border: '1px solid #444', borderRadius: '14px', padding: '16px', color: '#ffffff', fontSize: '16px', outline: 'none', textTransform: 'uppercase', boxSizing: 'border-box' }}
+                        />
+                        <input
+                          type="text"
+                          name="invoicePostalCode"
+                          value={formData.invoicePostalCode}
+                          onChange={handleInputChange}
+                          placeholder="CODI POSTAL FISCAL *"
+                          style={{ backgroundColor: '#141414', border: '1px solid #444', borderRadius: '14px', padding: '16px', color: '#ffffff', fontSize: '16px', outline: 'none', textTransform: 'uppercase', boxSizing: 'border-box' }}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -940,7 +975,8 @@ export default function Home() {
 
                 {formData.needsInvoice && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', color: '#d4af37', fontSize: '14px', borderTop: '1px solid #222', paddingTop: '10px' }}>
-                    <span>FACTURA A NOM DE: <strong>{formData.invoiceName}</strong> (NIF/CIF: {formData.taxId})</span>
+                    <span>FACTURA A: <strong>{formData.invoiceName}</strong> (NIF/CIF: {formData.taxId})</span>
+                    <span style={{ fontSize: '13px', color: '#aaa' }}>{formData.invoiceAddress}, {formData.invoicePostalCode} {formData.invoiceCity}</span>
                   </div>
                 )}
 
